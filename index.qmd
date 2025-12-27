@@ -1,0 +1,351 @@
+---
+title: "Analisi Statistiche BPD"
+author: "Lorenzo Atzeni"
+editor: visual
+format:
+  html:
+    self-contained: true
+    number-sections: false
+---
+
+## Data Cleaning
+
+```{r,echo=F}
+library(readxl)
+library(dplyr)
+library(stringr)
+library(tidyr)
+library(tibble)
+library(readr)
+library(ggplot2)
+library(glmmTMB) 
+library(here)
+library(performance)
+
+df_or<-read_excel("DATI/DATABASE Lorenzo.xlsx")
+
+df_raw <- read_excel("DATI/DF_Lore.xlsx")
+models_dir <- "C:/Users/39348/Desktop/BPD/data/derived/models"
+models <- readRDS(file.path(models_dir, "all_models.rds"))
+
+
+
+
+```
+
+Durante l'ispezione del dataset originale, ho notato che alcuni soggetti presentavano lo stesso ID ("TRAKCARE"), probabilmente un codice predefinito del software utilizzato per la raccolta dati. Per garantire l'univocità degli identificativi, ho assegnato a questi soggetti un nuovo codice nel formato "LA" seguito da un numero progressivo.
+
+Verifichiamo che ora ogni soggetto abbia un ID univoco:
+
+```{r}
+check_ID<-df_raw %>% count(df_raw$ID)
+summary(check_ID)
+```
+
+Il controllo conferma che tutti gli ID sono ora univoci (ogni soggetto compare una sola volta).
+
+I nomi delle colonne nel dataset originale contenevano parentesi e caratteri speciali (ad esempio spazi, simboli come `%`, `/`), che possono creare problemi nella manipolazione dei dati in R. Ho quindi rinominato le colonne rimuovendo questi caratteri.
+
+Inoltre, il dataset si presenta in formato *wide* (una riga per soggetto, con colonne separate per ogni timepoint). Per l'analisi longitudinale è necessario convertirlo in formato *long* (una riga per ogni osservazione, con una colonna che identifica il timepoint).
+
+```{r,echo=F,results="hide"}
+class(df_raw$Time_1)
+class(df_raw$Time_2)
+df_raw$Time_2<-as.numeric(df_raw$Time_2)
+
+df_long <- df_raw %>%
+  pivot_longer(
+    cols = matches("_(\\d+)$"),   # tutte le colonne che finiscono con _numero
+    names_to = c(".value", "timepoint"),
+    names_pattern = "^(.*)_(\\d+)$"
+  ) %>%
+  mutate(timepoint = as.integer(timepoint))
+
+
+#check:
+grep("tPTE", names(df_long), value = TRUE)
+
+
+```
+
+Controlliamo adesso il numero di osservazioni che abbiamo per ciascun timepoint.
+
+```{r}
+df_long %>%
+  filter(!is.na(tPTEF_perc_tE)) %>%
+  distinct(ID, timepoint) %>%
+  count(timepoint)
+```
+
+Vediamo che abbiamo 99 osservazioni dell'outocome di interesse **tPTEF_perc_tE** al primo timepoint; poi 64 al secondo e 32 al terzo.
+
+Per una visualizzazione più immediata:
+
+```{r,echo=F}
+df_long %>%
+  filter(!is.na(tPTEF_perc_tE)) %>%
+  count(timepoint) %>%
+  ggplot(aes(x = factor(timepoint), y = n)) +
+  geom_col(fill = "grey80", color = "black") +
+  labs(x = "Timepoint", y = "Number of observations  tPTEF%tE") +
+  theme_classic(base_size = 14)
+```
+
+Vediamo come si distribuisce l'outcome di interesse primario: tPTEF/Te % che nel nostro dataset è stato rinominato in tPTEF_perc_tE.
+
+```{r,echo=F}
+df_use <- df_long %>% filter(!is.na(tPTEF_perc_tE))
+
+x_min <- min(df_use$tPTEF_perc_tE, na.rm = TRUE)
+x_max <- max(df_use$tPTEF_perc_tE, na.rm = TRUE)
+
+# -----------------------
+# 1) HISTOGRAM (count)
+# -----------------------
+p_hist_dens <- ggplot(df_use, aes(x = tPTEF_perc_tE)) +
+  geom_histogram(
+    aes(y = after_stat(density)),
+    bins = 25,
+    fill = "grey85",
+    color = "black",
+    linewidth = 0.35
+  ) +
+  geom_density(
+    color = "red3",   # se la vuoi rossa
+    linewidth = 1,
+    trim = TRUE,
+    cut = 0
+  ) +
+  coord_cartesian(xlim = c(x_min, x_max)) +
+  labs(
+    title = "Distribution of tPTEF%tE",
+    x = "tPTEF%tE",
+    y = "Density"
+  ) +
+  theme_classic(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold"),
+    axis.line = element_line(color = "black"),
+    axis.ticks = element_line(color = "black")
+  )
+
+p_hist_dens
+
+```
+
+Dal grafico si vede che tPTEF%tE ha una distribuzione **asimmetrica positiva** (coda/skewed a destra). Questa forma è coerente con la scelta di fittare **un GLMM** (Generalized Linear Mixed Model) con family **Gamma** e **link log**, che gestisce bene variabili continue, positive e con asimmetria positiva.
+
+## Modello ad effetti misti GLMM
+
+Stimiamo un *mixed model* per rispondere alla domanda di ricerca principale e fare valutazione della funzione respiratoria nei neonati con e senza broncodisplasia.
+
+Dataset su cui stimeremo il modello:
+
+```{r}
+df_mod <- df_long %>%
+  filter(!is.na(Time), !is.na(tPTEF_perc_tE),!is.na(PH)) %>%
+  mutate(
+    ID = factor(ID),
+    
+    BPD = factor(BPD_Jensen, levels = c(0,1)),#0=No;1=YES
+    sex = factor(sex1M2F, levels = c(1,2)),#1=M;2=F
+    
+    LOS = factor(LOS),
+    PH  = factor(PH),
+    GA=  as.numeric(EG),
+    hsPDA = as.numeric(HSPDAgg)
+    
+    )
+
+```
+
+Idealmente, il modello "migliore" avrebbe slope ed intercetta random (1 + Time \| ID).
+
+Nel termine `(1 + Time | ID)`:
+
+-   (**1 \| ID)** = ogni soggetto ha una propria intercetta: consente livelli medi diversi di tPTEF%tE tra bambini.
+
+-   **(Time \| ID)** = **quanto cambia nel tempo ogni partecipante**, cioè la sua “traiettoria”. E' ragionevole supporre che ogni neonato abbia una diversa pendenza.
+
+    Questa specifica è utile se i dati contengono informazione sufficiente per stimare variazione inter-individuale nelle traiettorie.
+
+```{r, eval=F}
+m_level <- glmmTMB(
+  tPTEF_perc_tE ~ Time + BPD*HSPDAgg + GA + sex + LOS + PH +
+    (1 + Time | ID),
+  family = Gamma(link = "log"),
+  data = df_mod
+)
+
+```
+
+```{r,echo=F}
+m_level <- models$m_level
+summary(m_level)
+```
+
+Facendo la diagnostica della parte random si vede che la varianza della slope random di `Time` è praticamente nulla (≈ 0.000014) e la correlazione intercetta–slope è stimata a -1.00. Questo pattern indica che i dati **non supportano** una stima affidabile della slope random (modello “troppo complesso” rispetto all’informazione disponibile), e quindi la specifica più appropriata per l’analisi principale è il **random intercept** `(1 | ID)`.I l modello cheha una parte “random” troppo complessa rispetto all’informazione nei dati, quindi alcuni parametri dei random effects finiscono “sul bordo” (≈ 0) o diventano perfettamente collineari......
+
+Rifittiamo quindi il modello con la sola intercetta random **(1 \| ID).**
+
+```{r, eval=F}
+m_level0 <- glmmTMB(
+  tPTEF_perc_tE ~ Time + BPD*hsPDA + GA + sex + LOS + PH +
+    (1 |  ID),
+  family = Gamma(link = "log"),
+  data = df_mod
+)
+
+```
+
+Come prima cosa andiamo a vedere i residui e gli assunti:
+
+```{r,echo=F}
+#| fig-width: 12
+#| fig-height: 7
+#| fig-retina: 2
+#| out-width: "100%"
+m_level0 <- models$m_level0
+library(performance)
+
+check_model(m_level0)
+
+r2(m_level0)
+```
+
+Come possiamo vedere dal posterior predictive check il modello **riproduce bene la distribuzione** di `tPTEF_perc_tE` quindi la scelta di un GLM con family Gamma sembra essere stata corretta. Probabilmente un LMM (si potrebbe fare anche una prova) non sarebbe riuscito a predirre cosi bene i valori, e avrebbe predetto valori negativi dell' indice di respirazione che però è solo positivo. Inoltre, la diagnostica di uniformità dei residui simulati mostra un’aderenza soddisfacente alla diagonale attesa, supportando l’adeguatezza della specificazione del modello.
+
+Possiamo quindi guardare i coefficienti:
+
+```{r,echo=F}
+
+summary(m_level0)
+```
+
+Il modello stima:
+
+log(E\[Y\])=β0​+β1​Time+β2​BPD+β3​hsPDA+β4​GA+⋯+β9​(BPD×hsPDA)
+
+dove Y=`tPTEF_perc_tE`.
+
+Quindi: i coefficienti sono su scala logaritmica. Per interpretarli in termini di variazione percentuale:
+
+-   Se fai `exp(β)`, ottieni un **moltiplicatore** della media attesa di Y
+
+Interpretazione pratica:
+
+-   `exp(β) = 1.05` ⇒ circa **+5%** nell’outcome atteso per +1 unità del predittore.
+
+-   `exp(β) = 0.80` ⇒ circa **−20%** nell’outcome atteso.
+
+Vediamo coefficiente ***Time***: Per ogni mese in più di età, il tPTEF%tE diminuisce in media dello 0.32%, mantenendo costanti BPD, esposizione a hsPDA, età gestazionale, sesso, sepsi tardiva e ipertensione polmonare. Tuttavia, questo effetto non è statisticamente significativo (p = 0.317), quindi non abbiamo evidenza sufficiente per affermare che ci sia una variazione sistematica nel tempo della funzionalità respiratoria.
+
+coefficiente **BPD:** I neonati con broncodisplasia (BPD) presentano in media un tPTEF%tE inferiore dell'11.4% rispetto ai neonati senza BPD, **in assenza di esposizione a hsPDA** (hsPDA = 0 giorni), mantenendo costanti età corretta, età gestazionale, sesso, sepsi tardiva e ipertensione polmonare. Tuttavia, questa differenza non raggiunge la significatività statistica (p = 0.162).
+
+Nei neonati senza BPD, ogni giorno aggiuntivo di esposizione a **hsPDA** è associato a una riduzione media dello 0.79% nel tPTEF%tE, mantenendo costanti età corretta, BPD, età gestazionale, sesso, sepsi tardiva e ipertensione polmonare. Anche questo effetto non è statisticamente significativo (p = 0.598).
+
+**Per l'interazione BPD × hsPDA:** L'effetto dell'esposizione a hsPDA non differisce in modo statisticamente significativo tra neonati con e senza BPD (p = 0.607). Nei neonati con BPD, ogni giorno aggiuntivo di hsPDA è associato a un cambiamento trascurabile (+0.065%) rispetto all'effetto osservato nei neonati senza BPD.
+
+Coefficienti statisticamente significativi:
+
+**1. Età gestazionale (GA):**
+
+Per ogni settimana in più di età gestazionale alla nascita, il tPTEF%tE aumenta in media del **4,6%** , mantenendo costanti età corretta, BPD, esposizione a hsPDA, sesso, sepsi tardiva e ipertensione polmonare. Questo effetto è statisticamente significativo.
+
+**2. Sesso femminile (sex2):**
+
+I neonati di sesso femminile presentano in media un tPTEF%tE superiore del **16,4%** rispetto ai maschi, mantenendo costanti età corretta, BPD, esposizione a hsPDA, età gestazionale, sepsi tardiva e ipertensione polmonare. Questo effetto è statisticamente significativo (p = 0,026).
+
+**3. Ipertensione polmonare (PH1):**
+
+La presenza di ipertensione polmonare è associata a una riduzione media del **19,9%** nel tPTEF%tE, mantenendo costanti età corretta, BPD, esposizione a hsPDA, età gestazionale, sesso e sepsi tardiva. Questo effetto è statisticamente significativo (p = 0,004).
+
+## **Modello Traiettorie**
+
+Adesso stimiamo il modello con interazione Time per capire meglio le traiettorie del tempo. In particolare rispondiamo alla domanda:
+
+Le associazioni di BPD e hsPDA con tPTEF%tE cambiano con l’età corretta? Cioè le traiettorie nel tempo differiscono tra gruppi?
+
+```{r, eval=F}
+
+m_traj <- glmmTMB(
+  tPTEF_perc_tE ~ Time * BPD * hsPDA + GA + sex + LOS + PH +
+    (1 | ID),
+  family = Gamma(link = "log"),
+  data = df_mod)
+
+
+```
+
+```{r,echo=F}
+m_traj <- models$m_traj
+```
+
+Diagnostiche:
+
+```{r}
+#| fig-width: 12
+#| fig-height: 7
+#| fig-retina: 2
+#| out-width: "100%"
+check_model(m_traj)
+
+r2(m_traj)
+```
+
+Guardiamo i coefficienti:
+
+```{r}
+summary(m_traj)
+```
+
+Questo modello include le interazioni con `Time` per verificare se l’associazione di BPD e/o hsPDA con tPTEF%tE **cambia in funzione dell’età corretta**. In particolare:
+
+-   `Time:BPD1` testa se la differenza BPD vs non-BPD varia con l’età (traiettorie non parallele tra BPD e non-BPD).`Time:BPD1` = 0.00488, p = 0.562. Interpretazione (scala log, quindi moltiplicativa): `exp(0.00488) ≈ 1.0049` → **+0.49% per mese.**
+
+    -   Significato: la differenza tra BPD e non-BPD **tenderebbe** ad attenuarsi/aumentare di circa mezzo punto percentuale per mese (a hsPDA=0), **ma** l’evidenza è debole (p=0.56). Non emerge evidenza che l’effetto della BPD vari con l’età corretta; le traiettorie BPD vs non-BPD risultano compatibili con andamenti paralleli.
+
+-   `Time:hsPDA` testa se l’effetto di hsPDA varia con l’età nei non-BPD. exp(−0.000337) ≈ 0.99966 → −0.034% quindi **−0.034% per mese per ogni giorno di hsPDA.** Significato: nei non-BPD, l’effetto di hsPDA **non** sembra cambiare al crescere dell’età (praticamente zero; p=0.80). Non emerge evidenza che l’associazione hsPDA→tPTEF%tE nei non-BPD sia diversa a età più basse vs più alte.
+
+-   `Time:BPD1:hsPDA` testa se la modificazione dell’effetto di hsPDA da parte della BPD **dipende dall’età** (cioè se l’eventuale interazione BPD×hsPDA è diversa a età più basse vs più alte). L' interazione tripla `Time×BPD×hsPDA` non è significativo (p=0.589), indicando che non emerge evidenza che la modificazione dell’effetto di hsPDA da parte della BPD cambi con l’età corretta. In altre parole, l’eventuale differenza nell’effetto di hsPDA tra BPD e non-BPD appare sostanzialmente costante lungo il follow-up.
+
+Verifichiamo quale tra i due modelli è migliore tra m_traj che ha l interazione con Time ed il modello principale m_level0.
+
+Facciamo il confronto dei due modelli tramite Likelihood Ratio Test (LRT):
+
+```{r}
+
+anova(m_level0, m_traj)
+```
+
+**AIC** (*Akaike Information Criterion*) e **BIC** (*Bayesian Information Criterion*) bilanciano la bontà del fit con una penalità per la complessità del modello (AIC e BIC più bassi = modello migliore).
+
+AIC: 1230.8 vs 1235.3 → favorisce m_level0 quindi il modello senza interazione con Time.
+
+BIC: 1266.8 vs 1281.1 → favorisce m_level0 (differenza di \~14 punti, sostanziale)
+
+LRT: χ² = 1.52, df = 3, p = 0.68 → l'interazione tripla con il tempo non aggiunge nulla
+
+Il modello con interazioni con Time (`m_traj`) non migliora il fit rispetto al modello parsimonioso (`m_level0`): AIC e BIC risultano maggiori per `m_traj`, e il confronto tra modelli nidificati tramite LRT non è significativo (p = 0.68). Pertanto, per l’interpretazione principale riportiamo `m_level0`, che assume effetti costanti nel tempo e risulta supportato dai dati.
+
+### Analisi sensitività
+
+Fittiamo il modello principale m_level0 togliendo GA e mettendo BW ovvero Peso Nascita:
+
+```{r, eval=F}
+
+m_sens_BW <- glmmTMB(
+  tPTEF_perc_tE ~ Time + BPD * hsPDA + PN + sex + LOS + PH + (1 | ID),
+  family = Gamma(link = "log"),
+  data = df_mod
+)
+```
+
+```{r, echo=F}
+m_sens_BW <- models$m_sens_BW
+summary(m_sens_BW)
+```
+
+Per verificare la robustezza dei risultati rispetto all’aggiustamento per maturità alla nascita, abbiamo rifittato il modello principale sostituendo GA con il peso alla nascita (PN/BW). Le stime per BPD, hsPDA e la loro interazione rimangono coerenti (assenza di evidenza statistica), così come l’assenza di un trend temporale. L’associazione negativa con PH risulta stabile. Nel complesso, le conclusioni principali non dipendono dalla scelta GA vs BW come covariata di aggiustamento.
+
+<a href="outcome_secondari.html" class="btn btn-primary">Pagina successiva →</a>

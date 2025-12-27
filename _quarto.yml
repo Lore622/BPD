@@ -1,0 +1,26 @@
+project:
+  type: website
+  output-dir: docs
+
+website:
+  title: "Analisi statistiche BPD"
+  navbar:
+    left:
+      - text: "Modelli effetti misti"
+        href: index.qmd
+      - text: "Outcome secondari"
+        href: outcome_secondari.qmd
+      - text: "Analisi di sensibilità "
+        href: sensitive.qmd
+
+
+format:
+ html:
+  theme: flatly
+  toc: true
+  number-sections: false
+
+execute:
+  echo: true
+  warning: false
+  message: false

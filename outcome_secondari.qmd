@@ -1,0 +1,106 @@
+---
+title: "Outcome secondari"
+author: "Lorenzo Atzeni"
+editor: visual
+format:
+  html:
+    self-contained: true
+    number-sections: false
+---
+
+## Analisi Outcome Secondari
+
+Nella sezione degli **outcome secondari** applichiamo la **stessa specifica del modello principale** (GLMM Gamma con link log e intercetta random per soggetto) a ulteriori indici respiratori: **RR**, **VT/kg** e **tPTEF**. L’obiettivo è verificare se l’associazione con **BPD**, **hsPDA** (e la loro interazione), aggiustando per **Time, GA, sex, LOS, PH**, sia coerente anche su misure diverse da tPTEF%tE, fornendo una valutazione più completa della funzionalità respiratoria nel follow-up.
+
+# 1)Outcome: RR
+
+```{r,echo=F}
+library(glmmTMB)
+library(readr)
+library(here)
+library(ggplot2)
+
+
+
+df_mod <- readRDS(here("data", "derived", "df_mod.rds"))
+
+
+x_min <- min(df_mod$RR, na.rm = TRUE)
+x_max <- max(df_mod$RR, na.rm = TRUE)
+```
+
+```{r, echo=F}
+p_hist_dens_RR <- ggplot(df_mod, aes(x = RR)) +
+  geom_histogram(
+    aes(y = after_stat(density)),
+    bins = 25,
+    fill = "grey85",
+    color = "black",
+    linewidth = 0.35
+  ) +
+  geom_density(
+    color = "red3",   # se la vuoi rossa
+    linewidth = 1,
+    trim = TRUE,
+    cut = 0
+  ) +
+  coord_cartesian(xlim = c(x_min, x_max)) +
+  labs(
+    title = "Distribution of RR",
+    x = "RR",
+    y = "Density"
+  ) +
+  theme_classic(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold"),
+    axis.line = element_line(color = "black"),
+    axis.ticks = element_line(color = "black")
+  )
+
+p_hist_dens_RR
+summary(df_mod$RR)
+```
+
+```{r}
+# RR
+
+m_RR <- glmmTMB(
+  RR ~ Time + BPD * hsPDA + GA + sex + LOS + PH + (1 | ID),
+  family = Gamma(link = "log"),
+  data = df_mod
+)
+summary(m_RR)
+```
+
+# 2)Outcome: VT/kg
+
+```{r}
+# VT/kg
+m_VTkg <- glmmTMB(
+  Tidal_volume ~ Time + BPD * hsPDA + GA + sex + LOS + PH + (1 | ID),
+  family = Gamma(link = "log"),
+  data = df_mod
+)
+summary(m_VTkg)
+```
+
+# 3)Outcome: tPTEF
+
+```{r}
+
+# tPTEF
+m_tPTEF <- glmmTMB(
+  Time_PTEF ~ Time + BPD * hsPDA + GA + sex + LOS + PH + (1 | ID),
+  family = Gamma(link = "log"),
+  data = df_mod
+)
+summary(m_tPTEF)
+```
+
+## Discussione
+
+Per gli outcome secondari (RR, VT/kg, tPTEF) sono stati stimati GLMM Gamma con link log e intercetta random per soggetto. L’età corretta (mesi) è risultata associata a una marcata riduzione di RR (≈ −4.4% per mese, p \< 0.001) e a un incremento di VT/kg (≈ +1.5% per mese, p \< 0.001) e tPTEF (≈ +4.6% per mese, p \< 0.001). Non è emersa evidenza di un’associazione di hsPDA né di un’interazione hsPDA×BPD su questi outcome. Per tPTEF, tuttavia, BPD e ipertensione polmonare risultano associate a valori inferiori dell’indice (≈ −17% e ≈ −19%, rispettivamente), a parità di covariate
+
+::: {.d-flex .justify-content-between .mt-4}
+<a href="index.html" class="btn btn-primary">← Torna indietro</a> <a href="sensitive.html" class="btn btn-primary">Pagina successiva →</a>
+:::
