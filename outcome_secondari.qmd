@@ -99,7 +99,7 @@ summary(m_tPTEF)
 
 ## Discussione
 
-Per gli outcome secondari (RR, VT/kg, tPTEF) sono stati stimati GLMM Gamma con link log e intercetta random per soggetto. L’età corretta (mesi) è risultata associata a una marcata riduzione di RR (≈ −4.4% per mese, p \< 0.001) e a un incremento di VT/kg (≈ +1.5% per mese, p \< 0.001) e tPTEF (≈ +4.6% per mese, p \< 0.001). Non è emersa evidenza di un’associazione di hsPDA né di un’interazione hsPDA×BPD su questi outcome. Per tPTEF, tuttavia, BPD e ipertensione polmonare risultano associate a valori inferiori dell’indice (≈ −17% e ≈ −19%, rispettivamente), a parità di covariate
+Per gli outcome secondari (RR, VT/kg, tPTEF) sono stati stimati GLMM Gamma con link log e intercetta random per soggetto. L’età corretta (mesi) è risultata associata a una marcata riduzione di RR (≈ −4.4% per mese, p \< 0.001) e a un incremento di VT/kg (≈ +1.5% per mese, p \< 0.001) e tPTEF (≈ +4.6% per mese, p \< 0.001). Non è emersa evidenza di un’associazione di hsPDA né di un’interazione hsPDA×BPD su questi outcome. Per tPTEF, tuttavia, BPD e ipertensione polmonare risultano associate a valori inferiori dell’indice (≈ −17% e ≈ −19%, rispettivamente), a parità di covariate.
 
 ::: {.d-flex .justify-content-between .mt-4}
 <a href="index.html" class="btn btn-primary">← Torna indietro</a> <a href="sensitive.html" class="btn btn-primary">Pagina successiva →</a>

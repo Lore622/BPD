@@ -21,6 +21,8 @@ library(ggplot2)
 library(glmmTMB) 
 library(here)
 library(performance)
+library(ggeffects)
+        
 
 df_or<-read_excel("DATI/DATABASE Lorenzo.xlsx")
 
@@ -327,6 +329,112 @@ BIC: 1266.8 vs 1281.1 → favorisce m_level0 (differenza di \~14 punti, sostanzi
 LRT: χ² = 1.52, df = 3, p = 0.68 → l'interazione tripla con il tempo non aggiunge nulla
 
 Il modello con interazioni con Time (`m_traj`) non migliora il fit rispetto al modello parsimonioso (`m_level0`): AIC e BIC risultano maggiori per `m_traj`, e il confronto tra modelli nidificati tramite LRT non è significativo (p = 0.68). Pertanto, per l’interpretazione principale riportiamo `m_level0`, che assume effetti costanti nel tempo e risulta supportato dai dati.
+
+## **Modello Interazione PH**
+
+```{r, eval=F}
+m_ph <- glmmTMB(
+  tPTEF_perc_tE ~ Time+ PH * BPD * hsPDA + GA + sex + LOS +
+    (1 | ID),
+  family = Gamma(link = "log"),
+  data = df_mod
+)
+
+```
+
+```{r}
+m_ph <- models$m_ph
+summary(m_ph)
+```
+
+Grafico:
+
+```{r, echo=F}
+#| fig-width: 10
+#| fig-height: 6
+#| out-width: "100%"
+
+# --- reset "logico": riprendi modello e dati come li hai già ---
+m_traj <- models$m_traj
+
+# funzione per livello più frequente (per fissare covariate fattoriali)
+mode_level <- function(x) names(sort(table(x), decreasing = TRUE))[1]
+
+# fissa covariate (solo per la visualizzazione, NON è centratura)
+hsPDA_ref <- median(df_mod$hsPDA, na.rm = TRUE)
+GA_ref    <- mean(df_mod$GA, na.rm = TRUE)
+sex_ref   <- mode_level(df_mod$sex)
+LOS_ref   <- mode_level(df_mod$LOS)
+
+# Predizioni: Time continuo, gruppi BPD x PH, hsPDA fissata
+pred_bpdpH <- ggpredict(
+  m_traj,
+  terms = c("Time [all]", "BPD", "PH"),
+  condition = c(
+    hsPDA = hsPDA_ref,
+    GA = GA_ref,
+    sex = sex_ref,
+    LOS = LOS_ref
+  ),
+  type = "fixed",
+  bias_correction = TRUE
+)
+
+
+# Assicurati di avere queste label (come nel tuo ultimo codice)
+pred_bpdpH$BPD_lab <- ifelse(pred_bpdpH$group == "0", "no BPD", "BPD")
+pred_bpdpH$PH_lab  <- ifelse(pred_bpdpH$facet == "0", "no PH", "PH")
+
+# Rendile factor con ordine stabile (leggenda ordinata)
+pred_bpdpH$BPD_lab <- factor(pred_bpdpH$BPD_lab, levels = c("no BPD", "BPD"))
+pred_bpdpH$PH_lab  <- factor(pred_bpdpH$PH_lab, levels = c("no PH", "PH"))
+
+
+ggplot(
+  pred_bpdpH,
+  aes(
+    x = x, y = predicted,
+    color = BPD_lab,
+    fill  = BPD_lab,
+    linetype = PH_lab,
+    group = interaction(BPD_lab, PH_lab)
+  )
+) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high),
+              alpha = 0.10, colour = NA,
+              show.legend = FALSE) +     # <<--- QUESTA è la chiave
+  geom_line(linewidth = 1.2) +
+  scale_linetype_manual(values = c("no PH" = "solid", "PH" = "dashed")) +
+  scale_color_manual(values = c("no BPD" = "#0072B2", "BPD" = "#D55E00")) +
+  scale_fill_manual(values  = c("no BPD" = "#0072B2", "BPD" = "#D55E00")) +
+  labs(
+    x = "Corrected age at test (months)",
+    y = "Predicted tPTEF%tE",
+    color = "BPD",
+    linetype = "PH",
+    title = "Predicted tPTEF%tE over time by BPD and PH"
+  ) +
+  theme_classic(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold"),
+    legend.position = "bottom",
+    legend.box = "horizontal",
+    legend.title = element_blank(),
+    legend.key.width = unit(1.4, "cm")
+  )
+```
+
+Il grafico mostra le predizioni aggiustate di tPTEF%tE lungo l'età corretta (mesi) ottenute dal modello `m_traj`, che include interazioni tripla con il tempo. Le aree semitrasparenti rappresentano gli intervalli di confidenza al 95%, la cui ampiezza riflette l'incertezza statistica (maggiore dove i dati sono scarsi).
+
+Le curve sono state calcolate fissando le covariate a valori di riferimento: `hsPDA` al suo valore mediano, `GA` alla media campionaria, e le variabili categoriali (`sex`, `LOS`) alla modalità più frequente.
+
+**Interpretazione:**
+
+-   La presenza di PH (linee tratteggiate) è associata a valori predetti sistematicamente più bassi di tPTEF%tE, coerentemente con l'effetto significativo osservato nel modello (p = 0.004).
+
+-   **Nota importante**: Sebbene le curve per BPD e non-BPD mostrino un andamento visivamente divergente, l'interazione statistica `Time × BPD` nel modello **non è risultata significativa** (p = 0.562). Ciò indica che la differenza nelle traiettorie temporali tra i due gruppi è compatibile con la variabilità casuale e non supporta l'ipotesi di un'evoluzione differenziale nel tempo.
+
+La figura rappresenta quindi le predizioni medie di popolazione (effetti fissi), ma la sovrapposizione delle bande di confidenza e il test statistico formale suggeriscono che le traiettorie di BPD e non-BPD sono sostanzialmente parallele nell'intervallo di tempo osservato.
 
 ### Analisi sensitività
 
